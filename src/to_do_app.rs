@@ -68,9 +68,10 @@ impl eframe::App for ToDoApp {
                                 }
 
                                 if ui.button("Create todo!").clicked() {
-                                    let mut todo = Todo::default();
-                                    std::mem::swap(&mut todo, self.edited_todo.as_mut().unwrap());
-                                    self.todos.push(todo);
+                                    let mut todo = None;
+                                    std::mem::swap(&mut todo, &mut self.edited_todo);
+                                    self.todos.push(todo.unwrap());
+                                    self.mk_todo_dialog_shown = false;
                                 }
                             });
                     }
