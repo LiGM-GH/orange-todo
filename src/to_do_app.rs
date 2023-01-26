@@ -1,3 +1,5 @@
+use std::fmt;
+
 use egui::{CentralPanel, Color32, Frame, ScrollArea, Style};
 
 #[derive(Default)]
@@ -11,11 +13,44 @@ pub struct Todo {
     tags: Vec<Tag>,
 }
 
+pub struct TodoEditor {
+    todo: Option<Todo>,
+    save_result: Result<(), AddTodoError>,
+}
+
+impl Default for TodoEditor {
+    fn default() -> Self {
+        Self {
+            todo: None,
+            save_result: Ok(()),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ToDoApp {
     todos: Vec<Todo>,
     mk_todo_dialog_shown: bool,
-    edited_todo: Option<Todo>,
+    todo_editor: TodoEditor,
+}
+
+#[derive(Debug)]
+pub enum AddTodoError {
+    EmptyBody,
+    NoCurrentTodo,
+}
+
+impl std::fmt::Display for AddTodoError {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            formatter,
+            "{}",
+            match self {
+                Self::EmptyBody => "Body empty",
+                Self::NoCurrentTodo => "Current todo is missing!",
+            }
+        )
+    }
 }
 
 impl ToDoApp {
@@ -23,18 +58,23 @@ impl ToDoApp {
         Self::default()
     }
 
-    fn add_todo(&mut self) {
-        if let Some(todo) = self.edited_todo.as_ref() {
+    fn add_todo(&mut self) -> Result<(), AddTodoError> {
+        if let Some(todo) = self.todo_editor.todo.as_ref() {
             if !todo.body.is_empty() {
                 let mut todo = None;
-                std::mem::swap(&mut todo, &mut self.edited_todo);
+                std::mem::swap(&mut todo, &mut self.todo_editor.todo);
 
                 if let Some(todo) = todo {
                     self.todos.push(todo);
                 }
 
                 self.mk_todo_dialog_shown = false;
+                Ok(())
+            } else {
+                Err(AddTodoError::EmptyBody)
             }
+        } else {
+            Err(AddTodoError::NoCurrentTodo)
         }
     }
 }
@@ -74,24 +114,36 @@ impl eframe::App for ToDoApp {
                         Frame::window(&Style::default())
                             .fill(Color32::from_rgb(250, 100, 51))
                             .show(ui, |ui| {
-                                if self.edited_todo.is_none() {
-                                    self.edited_todo = Some(Todo::default());
+                                if self.todo_editor.todo.is_none() {
+                                    self.todo_editor.todo = Some(Todo::default());
                                 }
 
                                 ui.text_edit_singleline(
-                                    &mut self.edited_todo.as_mut().unwrap().heading,
+                                    &mut self.todo_editor.todo.as_mut().unwrap().heading,
                                 );
 
                                 ui.text_edit_singleline(
-                                    &mut self.edited_todo.as_mut().unwrap().body,
+                                    &mut self.todo_editor.todo.as_mut().unwrap().body,
                                 );
 
-                                for tag in self.edited_todo.as_mut().unwrap().tags.iter() {
+                                for tag in self.todo_editor.todo.as_mut().unwrap().tags.iter() {
                                     ui.label(&tag.0);
                                 }
 
                                 if ui.button("Create todo!").clicked() {
-                                    self.add_todo();
+                                    self.todo_editor.save_result = self.add_todo();
+                                }
+
+                                match &self.todo_editor.save_result {
+                                    Err(AddTodoError::EmptyBody) => {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Add body. Todo can't have empty body!",
+                                            )
+                                            .color(Color32::RED),
+                                        );
+                                    }
+                                    _ => {}
                                 }
                             });
                     }
