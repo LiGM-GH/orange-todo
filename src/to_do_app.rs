@@ -1,6 +1,4 @@
-use std::rc::Rc;
-
-use egui::{CentralPanel, Color32, ComboBox, Frame, RichText, Rounding, ScrollArea, Style, Ui};
+use egui::{CentralPanel, Color32, Frame, ScrollArea, Style};
 
 #[derive(Default)]
 pub struct Tag(String);
@@ -9,6 +7,7 @@ pub struct Tag(String);
 pub struct Todo {
     heading: String,
     body: String,
+    checked: bool,
     tags: Vec<Tag>,
 }
 
@@ -23,6 +22,21 @@ impl ToDoApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self::default()
     }
+
+    fn add_todo(&mut self) {
+        if let Some(todo) = self.edited_todo.as_ref() {
+            if !todo.body.is_empty() {
+                let mut todo = None;
+                std::mem::swap(&mut todo, &mut self.edited_todo);
+
+                if let Some(todo) = todo {
+                    self.todos.push(todo);
+                }
+
+                self.mk_todo_dialog_shown = false;
+            }
+        }
+    }
 }
 
 impl eframe::App for ToDoApp {
@@ -35,13 +49,18 @@ impl eframe::App for ToDoApp {
                 .always_show_scroll(false)
                 .show(ui, |ui| {
                     for todo in self.todos.iter() {
-                        ui.label(&todo.heading);
+                        ui.label(format!(
+                            "{} {}",
+                            if todo.checked { "V" } else { "X" },
+                            &todo.heading
+                        ));
                     }
 
                     if ui.button("Show make-todo-dialog").clicked() {
                         self.mk_todo_dialog_shown = !self.mk_todo_dialog_shown;
 
-                        println!(
+                        // TODO: use logging crate to replace this ugly code
+                        eprintln!(
                             "{}",
                             if self.mk_todo_dialog_shown {
                                 "mk_todo_dialog shown"
@@ -59,19 +78,20 @@ impl eframe::App for ToDoApp {
                                     self.edited_todo = Some(Todo::default());
                                 }
 
-                                ui.text_edit_singleline(&mut self.edited_todo.as_mut().unwrap().heading);
+                                ui.text_edit_singleline(
+                                    &mut self.edited_todo.as_mut().unwrap().heading,
+                                );
 
-                                ui.text_edit_singleline(&mut self.edited_todo.as_mut().unwrap().body);
+                                ui.text_edit_singleline(
+                                    &mut self.edited_todo.as_mut().unwrap().body,
+                                );
 
                                 for tag in self.edited_todo.as_mut().unwrap().tags.iter() {
                                     ui.label(&tag.0);
                                 }
 
                                 if ui.button("Create todo!").clicked() {
-                                    let mut todo = None;
-                                    std::mem::swap(&mut todo, &mut self.edited_todo);
-                                    self.todos.push(todo.unwrap());
-                                    self.mk_todo_dialog_shown = false;
+                                    self.add_todo();
                                 }
                             });
                     }
