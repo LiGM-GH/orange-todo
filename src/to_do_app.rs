@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{error::Error, fmt};
 
 use egui::{CentralPanel, Color32, Frame, ScrollArea, Style};
 
@@ -53,6 +53,8 @@ impl std::fmt::Display for AddTodoError {
     }
 }
 
+impl Error for AddTodoError {}
+
 impl ToDoApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self::default()
@@ -99,15 +101,11 @@ impl eframe::App for ToDoApp {
                     if ui.button("Show make-todo-dialog").clicked() {
                         self.mk_todo_dialog_shown = !self.mk_todo_dialog_shown;
 
-                        // TODO: use logging crate to replace this ugly code
-                        eprintln!(
-                            "{}",
-                            if self.mk_todo_dialog_shown {
-                                "mk_todo_dialog shown"
-                            } else {
-                                "mk_todo_dialog hidden"
-                            }
-                        );
+                        if self.mk_todo_dialog_shown {
+                            log::trace!("mk_todo_dialog shown")
+                        } else {
+                            log::trace!("mk_todo_dialog hidden")
+                        }
                     }
 
                     if self.mk_todo_dialog_shown {
@@ -142,6 +140,7 @@ impl eframe::App for ToDoApp {
                                             )
                                             .color(Color32::RED),
                                         );
+                                        log::info!("Todo body not added while trying to save.");
                                     }
                                     _ => {}
                                 }
