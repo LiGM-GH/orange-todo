@@ -4,11 +4,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use egui::{CentralPanel, Color32, Frame, RichText, ScrollArea, Style};
+use egui::{Align, CentralPanel, Color32, Frame, Layout, RichText, ScrollArea, Style};
 
 const EDITOR_COLOR: Color32 = Color32::from_rgb(250, 100, 51);
 const EDITOR_WARNING_COLOR: Color32 = Color32::WHITE;
 const BUTTON_SWITCH_DURATION: Duration = Duration::from_millis(100);
+const CHECKED_TODO_MARK_COLOR: Color32 = Color32::GREEN;
+const UNCHECKED_TODO_MARK_COLOR: Color32 = Color32::RED;
 
 #[derive(Default, Clone)]
 pub struct Tag(String);
@@ -136,24 +138,50 @@ impl ToDoApp {
 
     fn show_all_todos(&mut self, ui: &mut egui::Ui) {
         for (i, todo) in self.todos.iter_mut().enumerate() {
-            if ui
-                .button({
-                    let text = format!(
-                        "{} - {}",
-                        if todo.checked { "V" } else { "X" },
-                        &todo.heading
-                    );
+            let mut todo_icon_clicked: bool = false;
+            let mut todo_check_clicked: bool = false;
 
-                    let rich = if todo.checked {
-                        RichText::from(text).strikethrough()
-                    } else {
-                        RichText::from(text)
-                    };
+            ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
+                todo_check_clicked = ui
+                    .button({
+                        let text = if todo.checked { "V" } else { "X" };
+                        let rich = if todo.checked {
+                            RichText::from(text).color(CHECKED_TODO_MARK_COLOR)
+                        } else {
+                            RichText::from(text).color(UNCHECKED_TODO_MARK_COLOR)
+                        };
 
-                    rich
-                })
-                .clicked()
-            {
+                        rich
+                    })
+                    .clicked();
+                todo_icon_clicked = ui
+                    .button({
+                        let text = &todo.heading;
+
+                        let rich = if todo.checked {
+                            RichText::from(text).strikethrough()
+                        } else {
+                            RichText::from(text)
+                        };
+
+                        rich
+                    })
+                    .clicked()
+            });
+
+            if todo_check_clicked {
+                todo.checked = !todo.checked;
+
+                match self.todo_bound_with_editor {
+                    Some(num) if num == i => {
+                        self.todo_editor.todo.as_mut().unwrap().checked =
+                            !self.todo_editor.todo.as_ref().unwrap().checked;
+                    }
+                    _ => {}
+                }
+            }
+
+            if todo_icon_clicked {
                 log::trace!("Edit-todo dialog shown");
 
                 if self.button_switch_timer.is_none() {
@@ -185,13 +213,17 @@ impl ToDoApp {
                         .fill(EDITOR_COLOR)
                         .show(ui, |ui| {
                             if let Some(edited_todo) = self.todo_editor.todo.as_mut() {
-                                ui.text_edit_singleline(&mut edited_todo.heading);
+                                ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
+                                    ui.text_edit_singleline(&mut edited_todo.heading);
 
-                                ui.text_edit_singleline(&mut edited_todo.body);
+                                    ui.text_edit_singleline(&mut edited_todo.body);
+                                });
 
-                                for tag in edited_todo.tags.iter() {
-                                    ui.label(&tag.0);
-                                }
+                                ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
+                                    for tag in edited_todo.tags.iter() {
+                                        ui.label(&tag.0);
+                                    }
+                                });
 
                                 if ui.button("Save todo!").clicked() {
                                     self.todo_editor.save_result = {
@@ -203,7 +235,7 @@ impl ToDoApp {
                                         }
                                     };
 
-                                    log::trace!("{:?}", self.todo_editor.save_result);
+                                    log::trace!("Editor save result: {:?}", self.todo_editor.save_result);
                                     match self.todo_editor.save_result {
                                         Ok(_) => {
                                             self.todo_editor.todo = None;
