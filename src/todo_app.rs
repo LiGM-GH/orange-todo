@@ -1,16 +1,21 @@
+pub mod add_todo_error;
+pub mod todo_editor;
+
 use std::{
-    error::Error,
-    fmt, mem,
+    mem,
     time::{Duration, Instant},
 };
 
-use egui::{Align, CentralPanel, Color32, Frame, Layout, RichText, ScrollArea, Style};
+use egui::{Align, CentralPanel, Color32, Frame, Layout, RichText, ScrollArea, Style, Ui};
+
+use self::{add_todo_error::AddTodoError, todo_editor::TodoEditor};
 
 const EDITOR_COLOR: Color32 = Color32::from_rgb(250, 100, 51);
 const EDITOR_WARNING_COLOR: Color32 = Color32::WHITE;
 const BUTTON_SWITCH_DURATION: Duration = Duration::from_millis(100);
 const CHECKED_TODO_MARK_COLOR: Color32 = Color32::GREEN;
 const UNCHECKED_TODO_MARK_COLOR: Color32 = Color32::RED;
+const LABEL_WIDTH: f32 = 20.0;
 
 #[derive(Default, Clone)]
 pub struct Tag(String);
@@ -23,22 +28,8 @@ pub struct Todo {
     pub tags: Vec<Tag>,
 }
 
-pub struct TodoEditor {
-    todo: Option<Todo>,
-    save_result: Result<(), AddTodoError>,
-}
-
-impl Default for TodoEditor {
-    fn default() -> Self {
-        Self {
-            todo: None,
-            save_result: Ok(()),
-        }
-    }
-}
-
 #[derive(Default)]
-pub struct ToDoApp {
+pub struct TodoApp {
     todos: Vec<Todo>,
     show_todo_maker: bool,
     todo_maker: TodoEditor,
@@ -47,28 +38,7 @@ pub struct ToDoApp {
     button_switch_timer: Option<std::time::Instant>,
 }
 
-#[derive(Debug)]
-pub enum AddTodoError {
-    EmptyBody,
-    NoCurrentTodo,
-}
-
-impl std::fmt::Display for AddTodoError {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            formatter,
-            "{}",
-            match self {
-                Self::EmptyBody => "Body empty",
-                Self::NoCurrentTodo => "Current todo is missing!",
-            }
-        )
-    }
-}
-
-impl Error for AddTodoError {}
-
-impl ToDoApp {
+impl TodoApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self::default()
     }
@@ -101,7 +71,7 @@ impl ToDoApp {
         }
     }
 
-    fn make_editor(&mut self, ui: &mut egui::Ui) {
+    fn make_editor(&mut self, ui: &mut Ui) {
         Frame::window(&Style::default())
             .fill(EDITOR_COLOR)
             .show(ui, |ui| {
@@ -136,38 +106,9 @@ impl ToDoApp {
             });
     }
 
-    fn show_all_todos(&mut self, ui: &mut egui::Ui) {
+    fn show_all_todos(&mut self, mut ui: &mut Ui) {
         for (i, todo) in self.todos.iter_mut().enumerate() {
-            let mut todo_icon_clicked: bool = false;
-            let mut todo_check_clicked: bool = false;
-
-            ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                todo_check_clicked = ui
-                    .button({
-                        let text = if todo.checked { "V" } else { "X" };
-                        let rich = if todo.checked {
-                            RichText::from(text).color(CHECKED_TODO_MARK_COLOR)
-                        } else {
-                            RichText::from(text).color(UNCHECKED_TODO_MARK_COLOR)
-                        };
-
-                        rich
-                    })
-                    .clicked();
-                todo_icon_clicked = ui
-                    .button({
-                        let text = &todo.heading;
-
-                        let rich = if todo.checked {
-                            RichText::from(text).strikethrough()
-                        } else {
-                            RichText::from(text)
-                        };
-
-                        rich
-                    })
-                    .clicked()
-            });
+            let (todo_check_clicked, todo_icon_clicked) = make_todo_edit(&mut ui, &todo);
 
             if todo_check_clicked {
                 todo.checked = !todo.checked;
@@ -213,16 +154,19 @@ impl ToDoApp {
                         .fill(EDITOR_COLOR)
                         .show(ui, |ui| {
                             if let Some(edited_todo) = self.todo_editor.todo.as_mut() {
-                                ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                                    ui.text_edit_singleline(&mut edited_todo.heading);
+                                ui.text_edit_singleline(&mut edited_todo.heading);
 
-                                    ui.text_edit_singleline(&mut edited_todo.body);
-                                });
+                                ui.text_edit_multiline(&mut edited_todo.body);
 
                                 ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                                    for tag in edited_todo.tags.iter() {
-                                        ui.label(&tag.0);
-                                    }
+                                    display_tags(edited_todo, ui);
+
+                                    let mut new_label = String::new();
+
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut new_label)
+                                            .desired_width(LABEL_WIDTH),
+                                    )
                                 });
 
                                 if ui.button("Save todo!").clicked() {
@@ -235,7 +179,10 @@ impl ToDoApp {
                                         }
                                     };
 
-                                    log::trace!("Editor save result: {:?}", self.todo_editor.save_result);
+                                    log::trace!(
+                                        "Editor save result: {:?}",
+                                        self.todo_editor.save_result
+                                    );
                                     match self.todo_editor.save_result {
                                         Ok(_) => {
                                             self.todo_editor.todo = None;
@@ -266,7 +213,7 @@ impl ToDoApp {
     }
 }
 
-impl eframe::App for ToDoApp {
+impl eframe::App for TodoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         CentralPanel::default().show(ctx, |ui| {
             ui.heading("Orange To Do - a minimalistic to do app");
@@ -292,5 +239,47 @@ impl eframe::App for ToDoApp {
                     }
                 });
         });
+    }
+}
+
+fn make_todo_edit(ui: &mut &mut Ui, todo: &&mut Todo) -> (bool, bool) {
+    let mut todo_check_clicked: bool = false;
+    let mut todo_icon_clicked: bool = false;
+
+    ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
+        todo_check_clicked = ui
+            .button({
+                let text = if todo.checked { "V" } else { "X" };
+                let rich = if todo.checked {
+                    RichText::from(text).color(CHECKED_TODO_MARK_COLOR)
+                } else {
+                    RichText::from(text).color(UNCHECKED_TODO_MARK_COLOR)
+                };
+
+                rich
+            })
+            .clicked();
+
+        todo_icon_clicked = ui
+            .button({
+                let text = &todo.heading;
+
+                let rich = if todo.checked {
+                    RichText::from(text).strikethrough()
+                } else {
+                    RichText::from(text)
+                };
+
+                rich
+            })
+            .clicked();
+    });
+
+    (todo_check_clicked, todo_icon_clicked)
+}
+
+fn display_tags(edited_todo: &Todo, ui: &mut Ui) {
+    for tag in edited_todo.tags.iter() {
+        ui.label(&tag.0);
     }
 }
