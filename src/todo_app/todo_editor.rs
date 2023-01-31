@@ -2,6 +2,7 @@ use crate::Todo;
 
 use super::add_todo_error::AddTodoError;
 
+#[derive(Debug)]
 pub struct TodoEditor {
     pub todo: Option<Todo>,
     pub save_result: Result<(), AddTodoError>,

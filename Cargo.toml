@@ -5,6 +5,11 @@ edition = "2021"
 
 [dependencies]
 eframe = "0.20.1"
-egui = "0.20.1"
+egui = { version = "0.20.1", features = ["persistence"] }
+egui_extras = { version = "0.20.0", features = ["image"], default-features = false }
 env_logger = "0.10.0"
+image = { version = "0.24.5", default-features = false, features = ["jpeg"] }
 log = "0.4.17"
+postgres = "0.19.4"
+serde = "1.0.152"
+toml = "0.7.0"
