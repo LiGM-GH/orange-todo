@@ -1,4 +1,3 @@
-pub mod add_todo_error;
 pub mod todo;
 pub mod todo_editor;
 
@@ -8,10 +7,10 @@ use std::{
 };
 
 use self::{
-    add_todo_error::AddTodoError,
-    todo::{Tag, Todo},
+    todo::{PartialTodo, Todo, TodoError},
     todo_editor::TodoEditor,
 };
+
 use crate::db::Config;
 use egui::{Align, CentralPanel, Color32, Frame, Layout, RichText, ScrollArea, Style, Ui};
 use egui_extras::RetainedImage;
@@ -29,6 +28,7 @@ pub struct TodoApp {
     on_close: OnClose,
     edit: TodoEditing,
     image: egui_extras::RetainedImage,
+    got_from_db: usize,
 }
 
 #[derive(Default, Debug)]
@@ -54,6 +54,7 @@ impl Default for TodoApp {
             edit: TodoEditing::default(),
             image: RetainedImage::from_image_bytes("orange.jpg", include_bytes!("orange.jpg"))
                 .expect("Couldn't find image 'orange.jpg' which is by default in src/ dir."),
+            got_from_db: 0,
         }
     }
 }
@@ -65,40 +66,12 @@ impl TodoApp {
         default
     }
 
-    pub fn insert_todo(&mut self, todo: Todo) {
-        self.todos.push(todo);
-    }
-
-    fn add_todo(&mut self) -> Result<(), AddTodoError> {
-        if let Some(todo) = self.edit.todo_maker.todo.as_ref() {
-            if !todo.body.is_empty() {
-                let mut todo = None;
-
-                // &mut self... should be dropped as fast as possible
-                {
-                    std::mem::swap(&mut todo, &mut self.edit.todo_maker.todo);
-                }
-
-                if let Some(todo) = todo {
-                    self.todos.push(todo);
-                }
-
-                self.edit.show_todo_maker = false;
-                Ok(())
-            } else {
-                Err(AddTodoError::EmptyBody)
-            }
-        } else {
-            Err(AddTodoError::NoCurrentTodo)
-        }
-    }
-
     fn make_editor(&mut self, ui: &mut Ui) {
         Frame::window(&Style::default())
             .fill(EDITOR_COLOR)
             .show(ui, |ui| {
                 if self.edit.todo_maker.todo.is_none() {
-                    self.edit.todo_maker.todo = Some(Todo::default());
+                    self.edit.todo_maker.todo = Some(PartialTodo::default());
                 }
 
                 {
@@ -110,15 +83,29 @@ impl TodoApp {
                 }
 
                 for tag in self.edit.todo_maker.todo.as_mut().unwrap().tags.iter() {
-                    ui.label(&tag.0);
+                    ui.label(tag);
                 }
 
                 if ui.button("Create todo!").clicked() {
-                    self.edit.todo_maker.save_result = self.add_todo();
-                }
+                    self.edit.todo_maker.save_result = match Todo::try_from(
+                        self.edit
+                            .todo_maker
+                            .todo
+                            .clone()
+                            .expect("Should have created todo first..."),
+                    ) {
+                        Ok(val) => {
+                            self.todos.push(val);
+                            self.edit.todo_maker.todo = None;
+                            self.edit.show_todo_maker = false;
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    };
+                };
 
                 match &self.edit.todo_maker.save_result {
-                    Err(AddTodoError::EmptyBody) => {
+                    Err(TodoError::EmptyBody) => {
                         ui.label(
                             RichText::new("Add body. Todo can't have empty body!")
                                 .color(EDITOR_WARNING_COLOR),
@@ -155,7 +142,7 @@ impl TodoApp {
 
                 if self.edit.todo_bound_with_editor.is_none() {
                     self.edit.todo_bound_with_editor = Some(i);
-                    self.edit.todo_editor.todo = Some(Clone::clone(todo));
+                    self.edit.todo_editor.todo = Some(Clone::clone(todo).into());
                 } else {
                     log::trace!("{:#?}", self.edit.button_switch_timer);
                     if let Some(timer) = self.edit.button_switch_timer {
@@ -195,11 +182,16 @@ impl TodoApp {
 
                                 if ui.button("Save todo!").clicked() {
                                     self.edit.todo_editor.save_result = {
-                                        if edited_todo.body.is_empty() {
-                                            Err(AddTodoError::EmptyBody)
-                                        } else {
-                                            mem::swap(edited_todo, todo);
-                                            Ok(())
+                                        let edition =
+                                            TryInto::<Todo>::try_into(edited_todo.clone());
+
+                                        match edition {
+                                            Ok(mut val) => {
+                                                mem::swap(&mut val, todo);
+                                                self.edit.todo_editor.todo = None;
+                                                Ok(())
+                                            }
+                                            Err(err) => Err(err),
                                         }
                                     };
 
@@ -212,7 +204,7 @@ impl TodoApp {
                                             self.edit.todo_editor.todo = None;
                                             self.edit.todo_bound_with_editor = None;
                                         }
-                                        Err(AddTodoError::EmptyBody) => {
+                                        Err(TodoError::EmptyBody) => {
                                             log::info!("Tried to remove todo's body!");
                                         }
                                         _ => {}
@@ -221,7 +213,7 @@ impl TodoApp {
                             }
 
                             match self.edit.todo_editor.save_result {
-                                Err(AddTodoError::EmptyBody) => {
+                                Err(TodoError::EmptyBody) => {
                                     ui.label(
                                         RichText::from("Add body. Todo can't have empty body!")
                                             .color(EDITOR_WARNING_COLOR),
@@ -240,39 +232,67 @@ impl TodoApp {
         let mut client = set_client()?;
         for row in client
             .query("SELECT * FROM todo", &[])
-            .map_err(|err| format!("read_from_db: {}", err.to_string()))?
+            .map_err(|err| format!("read_from_db: query: {}", err.to_string()))?
         {
-            self.todos.push(Todo {
-                heading: row
-                    .try_get(1)
-                    .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
-                body: row
-                    .try_get(2)
-                    .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
-                checked: row
-                    .try_get(3)
-                    .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
-                tags: match row
-                    .try_get::<usize, Vec<String>>(6)
-                    .map_err(|err| format!("read_from_db: row: {}", err.to_string()))
-                {
-                    Ok(val) => val.into_iter().map(|tagname| Tag(tagname)).collect(),
-                    Err(_) => Vec::new(),
-                },
-            });
+            self.todos.push(
+                Todo::try_from(PartialTodo {
+                    heading: row
+                        .try_get(1)
+                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
+                    body: row
+                        .try_get(2)
+                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
+                    checked: row
+                        .try_get(3)
+                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
+                    tags: match row
+                        .try_get::<usize, Vec<String>>(6)
+                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))
+                    {
+                        Ok(val) => val,
+                        Err(_) => Vec::new(),
+                    },
+                })
+                .map_err(|err| err.to_string())?,
+            );
         }
+
+        self.got_from_db = self.todos.len();
+
         Ok(())
     }
 
     fn save_into_db(&self) -> Result<(), String> {
         let mut client = set_client()?;
-        for todo in self.todos.iter() {
-            client
-                .execute(
-                    "INSERT INTO todo (heading, body, checked) VALUES ($1, $2, $3)",
-                    &[&todo.heading, &todo.body, &todo.checked],
-                )
-                .map_err(|err| format!("execute: {}", err.to_string()))?;
+
+        for (i, todo) in self.todos.iter().enumerate() {
+            let part: PartialTodo = todo.clone().into();
+
+            log::trace!("{:?}", part);
+
+            if i < self.got_from_db {
+                log::trace!(
+                    "UPDATE todo SET heading = {}, body = {}, checked = {} WHERE id = {}",
+                    part.heading,
+                    part.body,
+                    part.checked,
+                    i as i32
+                );
+
+                client
+                    .execute(
+                        "UPDATE todo SET heading = $1, body = $2, checked = $3 WHERE id = $4",
+                        &[&part.heading, &part.body, &part.checked, &(i as i32 + 1)],
+                    )
+                    .map_err(|err| format!("execute: {}", err.to_string()))?;
+            } else {
+                client
+                    .execute(
+                        "INSERT INTO todo (heading, body, checked) VALUES ($1, $2, $3)",
+                        &[&part.heading, &part.body, &part.checked],
+                    )
+                    .map_err(|err| format!("execute: {}", err.to_string()))?;
+            }
         }
 
         Ok(())
@@ -343,9 +363,9 @@ impl eframe::App for TodoApp {
     }
 }
 
-fn display_tags(edited_todo: &Todo, ui: &mut Ui) {
-    for tag in edited_todo.tags.iter() {
-        ui.label(&tag.0);
+fn display_tags(todo: &PartialTodo, ui: &mut Ui) {
+    for tag in todo.tags.iter() {
+        ui.label(tag);
     }
 }
 
@@ -382,7 +402,7 @@ fn make_todo_edit(ui: &mut &mut Ui, todo: &&mut Todo) -> (bool, bool) {
 
         todo_icon_clicked = ui
             .button({
-                let text = &todo.heading;
+                let text = todo.heading();
 
                 let rich = if todo.checked {
                     RichText::from(text).strikethrough()

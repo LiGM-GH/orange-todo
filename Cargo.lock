@@ -1558,6 +1558,7 @@ dependencies = [
  "log",
  "postgres",
  "serde",
+ "thiserror",
  "toml 0.7.0",
 ]
 

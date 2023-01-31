@@ -3,7 +3,7 @@ mod todo_app;
 
 use db::Config;
 use postgres::{Client, NoTls};
-use todo_app::{todo::Todo, TodoApp};
+use todo_app::TodoApp;
 
 fn main() {
     env_logger::init();
