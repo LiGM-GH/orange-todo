@@ -12,16 +12,17 @@ use self::{
 };
 
 use crate::db::{self, Config};
-use egui::{Align, CentralPanel, Color32, Frame, Layout, RichText, ScrollArea, Style, Ui};
+use egui::{
+    Align, Button, CentralPanel, Color32, Frame, Layout, Response, RichText, ScrollArea, Style, Ui,
+};
 use egui_extras::RetainedImage;
 use postgres::{Client, NoTls};
 
 const EDITOR_COLOR: Color32 = Color32::from_rgb(250, 100, 51);
 const EDITOR_WARNING_COLOR: Color32 = Color32::WHITE;
 const BUTTON_SWITCH_DURATION: Duration = Duration::from_millis(100);
-const CHECKED_TODO_MARK_COLOR: Color32 = Color32::GREEN;
-const UNCHECKED_TODO_MARK_COLOR: Color32 = Color32::RED;
-const LABEL_WIDTH: f32 = 20.0;
+const CHECKED_TODO_MARK_COLOR: Color32 = Color32::DARK_GREEN;
+const UNCHECKED_TODO_MARK_COLOR: Color32 = Color32::DARK_RED;
 
 pub struct TodoApp {
     todos: Vec<Todo>,
@@ -122,7 +123,7 @@ impl TodoApp {
             });
     }
 
-    fn show_all_todos(&mut self, ui: &mut Ui) {
+    fn perform_remove(&mut self) {
         if self.todo_to_remove.is_some() {
             match self
                 .todos
@@ -138,16 +139,20 @@ impl TodoApp {
 
             self.todo_to_remove = None;
         }
+    }
 
-        for (i, todo) in self.todos.iter_mut().enumerate() {
+    fn show_all_todos(&mut self, ui: &mut Ui) {
+        self.perform_remove();
+
+        for todo in self.todos.iter_mut() {
             let (todo_check_clicked, todo_icon_clicked, todo_remove_clicked) =
-                make_todo_edit(ui, &todo);
+                show_todo_header(ui, &todo);
 
             if todo_check_clicked {
                 todo.checked = !todo.checked;
 
                 match self.edit.todo_bound_with_editor {
-                    Some(num) if num == i => {
+                    Some(num) if num == *todo.id() as usize => {
                         self.edit.todo_editor.todo.as_mut().unwrap().checked =
                             !self.edit.todo_editor.todo.as_ref().unwrap().checked;
                     }
@@ -162,22 +167,16 @@ impl TodoApp {
             if todo_icon_clicked {
                 log::trace!("Edit-todo dialog shown");
 
-                if self.edit.button_switch_timer.is_none() {
-                    self.edit.button_switch_timer = Some(Instant::now());
-                }
+                start_timer(&mut self.edit.button_switch_timer);
 
                 if self.edit.todo_bound_with_editor.is_none() {
-                    self.edit.todo_bound_with_editor = Some(i);
+                    self.edit.todo_bound_with_editor = Some(*todo.id() as usize);
                     self.edit.todo_editor.todo = Some(Clone::clone(todo).into());
                 } else {
                     log::trace!("{:#?}", self.edit.button_switch_timer);
+
                     if let Some(timer) = self.edit.button_switch_timer {
-                        log::trace!(
-                            "Comparison ended with result {}",
-                            timer.elapsed() >= BUTTON_SWITCH_DURATION
-                        );
                         if timer.elapsed() >= BUTTON_SWITCH_DURATION {
-                            log::trace!("Elapsed {} millis", timer.elapsed().as_millis());
                             self.edit.todo_bound_with_editor = None;
                             self.edit.button_switch_timer = None;
                         };
@@ -186,7 +185,7 @@ impl TodoApp {
             }
 
             match self.edit.todo_bound_with_editor {
-                Some(num) if num == i => {
+                Some(num) if num == *todo.id() as usize => {
                     Frame::window(&Style::default())
                         .fill(EDITOR_COLOR)
                         .show(ui, |ui| {
@@ -197,13 +196,6 @@ impl TodoApp {
 
                                 ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
                                     display_tags(edited_todo, ui);
-
-                                    let mut new_label = String::new();
-
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut new_label)
-                                            .desired_width(LABEL_WIDTH),
-                                    )
                                 });
 
                                 if ui.button("Save todo!").clicked() {
@@ -225,6 +217,7 @@ impl TodoApp {
                                         "Editor save result: {:?}",
                                         self.edit.todo_editor.save_result
                                     );
+
                                     match self.edit.todo_editor.save_result {
                                         Ok(_) => {
                                             self.edit.todo_editor.todo = None;
@@ -287,14 +280,6 @@ impl TodoApp {
             let part: PartialTodo = todo.clone().into();
 
             log::trace!("{:?}", part);
-
-            log::trace!(
-                "UPDATE todo SET heading = {}, body = {}, checked = {} WHERE id = {}",
-                part.heading,
-                part.body,
-                part.checked,
-                part.id,
-            );
 
             let mut transaction = client.transaction()?;
 
@@ -404,40 +389,54 @@ fn set_client() -> Result<Client, db::set::Error> {
     Ok(Client::connect(&connect_config, NoTls).map_err(|_| Error::SetupDb)?)
 }
 
-fn make_todo_edit(ui: &mut Ui, todo: &&mut Todo) -> (bool, bool, bool) {
+fn check_button(ui: &mut Ui, checked: bool) -> Response {
+    ui.add(
+        Button::new(RichText::from(if checked { "☑" } else { "☐" }))
+            .fill(match checked {
+                true => CHECKED_TODO_MARK_COLOR,
+                false => UNCHECKED_TODO_MARK_COLOR,
+            })
+            .frame(false),
+    )
+}
+
+fn heading_button(ui: &mut Ui, text: &str, checked: bool) -> Response {
+    ui.add(
+        Button::new({
+            if checked {
+                RichText::from(text).strikethrough()
+            } else {
+                RichText::from(text)
+            }
+        })
+        .frame(false),
+    )
+}
+
+fn delete_button(ui: &mut Ui) -> Response {
+    ui.add(
+        Button::new(RichText::from("🗑"))
+            .fill(Color32::RED)
+            .frame(false),
+    )
+}
+
+fn show_todo_header(ui: &mut Ui, todo: &&mut Todo) -> (bool, bool, bool) {
     let mut todo_check_clicked: bool = false;
     let mut todo_icon_clicked: bool = false;
     let mut todo_remove_clicked: bool = false;
 
     ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-        todo_check_clicked = ui
-            .button({
-                let text = if todo.checked { "V" } else { "X" };
-                let rich = if todo.checked {
-                    RichText::from(text).color(CHECKED_TODO_MARK_COLOR)
-                } else {
-                    RichText::from(text).color(UNCHECKED_TODO_MARK_COLOR)
-                };
-
-                rich
-            })
-            .clicked();
-
-        todo_icon_clicked = ui
-            .button({
-                let text = todo.heading();
-
-                let rich = if todo.checked {
-                    RichText::from(text).strikethrough()
-                } else {
-                    RichText::from(text)
-                };
-
-                rich
-            })
-            .clicked();
-        todo_remove_clicked = ui.button(RichText::from("🗑️").color(Color32::RED)).clicked();
+        todo_check_clicked = check_button(ui, todo.checked).clicked();
+        todo_icon_clicked = heading_button(ui, todo.heading(), todo.checked).clicked();
+        todo_remove_clicked = delete_button(ui).clicked();
     });
 
     (todo_check_clicked, todo_icon_clicked, todo_remove_clicked)
+}
+
+fn start_timer(timer: &mut Option<Instant>) {
+    if timer.is_none() {
+        *timer = Some(Instant::now());
+    }
 }
