@@ -7,11 +7,11 @@ use std::{
 };
 
 use self::{
-    todo::{PartialTodo, Todo, TodoError},
+    todo::{Id, PartialTodo, Todo, TodoError},
     todo_editor::TodoEditor,
 };
 
-use crate::db::Config;
+use crate::db::{self, Config};
 use egui::{Align, CentralPanel, Color32, Frame, Layout, RichText, ScrollArea, Style, Ui};
 use egui_extras::RetainedImage;
 use postgres::{Client, NoTls};
@@ -28,7 +28,8 @@ pub struct TodoApp {
     on_close: OnClose,
     edit: TodoEditing,
     image: egui_extras::RetainedImage,
-    got_from_db: usize,
+    removed_todos: Vec<Id>,
+    todo_to_remove: Option<Id>,
 }
 
 #[derive(Default, Debug)]
@@ -52,9 +53,10 @@ impl Default for TodoApp {
             todos: Vec::new(),
             on_close: OnClose::default(),
             edit: TodoEditing::default(),
-            image: RetainedImage::from_image_bytes("orange.jpg", include_bytes!("orange.jpg"))
+            image: RetainedImage::from_image_bytes("orange.png", include_bytes!("orange.png"))
                 .expect("Couldn't find image 'orange.jpg' which is by default in src/ dir."),
-            got_from_db: 0,
+            removed_todos: Vec::new(),
+            todo_to_remove: None,
         }
     }
 }
@@ -71,7 +73,10 @@ impl TodoApp {
             .fill(EDITOR_COLOR)
             .show(ui, |ui| {
                 if self.edit.todo_maker.todo.is_none() {
-                    self.edit.todo_maker.todo = Some(PartialTodo::default());
+                    self.edit.todo_maker.todo = Some(match self.todos.iter().last() {
+                        Some(val) => PartialTodo::new(val.id().clone() + 1),
+                        _ => PartialTodo::new(1 as i32),
+                    });
                 }
 
                 {
@@ -117,9 +122,26 @@ impl TodoApp {
             });
     }
 
-    fn show_all_todos(&mut self, mut ui: &mut Ui) {
+    fn show_all_todos(&mut self, ui: &mut Ui) {
+        if self.todo_to_remove.is_some() {
+            match self
+                .todos
+                .iter()
+                .position(|e| *e.id() == self.todo_to_remove.unwrap())
+            {
+                Some(val) => {
+                    self.todos.remove(val);
+                    self.removed_todos.push(self.todo_to_remove.unwrap());
+                }
+                _ => {}
+            }
+
+            self.todo_to_remove = None;
+        }
+
         for (i, todo) in self.todos.iter_mut().enumerate() {
-            let (todo_check_clicked, todo_icon_clicked) = make_todo_edit(&mut ui, &todo);
+            let (todo_check_clicked, todo_icon_clicked, todo_remove_clicked) =
+                make_todo_edit(ui, &todo);
 
             if todo_check_clicked {
                 todo.checked = !todo.checked;
@@ -131,6 +153,10 @@ impl TodoApp {
                     }
                     _ => {}
                 }
+            }
+
+            if todo_remove_clicked {
+                self.todo_to_remove = Some(todo.id().clone());
             }
 
             if todo_icon_clicked {
@@ -228,71 +254,65 @@ impl TodoApp {
         }
     }
 
-    fn read_from_db(&mut self) -> Result<(), String> {
+    fn read_from_db(&mut self) -> Result<(), anyhow::Error> {
         let mut client = set_client()?;
-        for row in client
-            .query("SELECT * FROM todo", &[])
-            .map_err(|err| format!("read_from_db: query: {}", err.to_string()))?
-        {
-            self.todos.push(
-                Todo::try_from(PartialTodo {
-                    heading: row
-                        .try_get(1)
-                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
-                    body: row
-                        .try_get(2)
-                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
-                    checked: row
-                        .try_get(3)
-                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))?,
-                    tags: match row
-                        .try_get::<usize, Vec<String>>(6)
-                        .map_err(|err| format!("read_from_db: row: {}", err.to_string()))
-                    {
-                        Ok(val) => val,
-                        Err(_) => Vec::new(),
-                    },
-                })
-                .map_err(|err| err.to_string())?,
-            );
-        }
 
-        self.got_from_db = self.todos.len();
+        for row in client.query("SELECT * FROM todo", &[])? {
+            match Todo::try_from(PartialTodo {
+                id: row.try_get(0)?,
+                heading: row.try_get(1)?,
+                body: row.try_get(2)?,
+                checked: row.try_get(3)?,
+                tags: match row.try_get::<usize, Vec<String>>(6) {
+                    Ok(val) => val,
+                    Err(_) => Vec::new(),
+                },
+            }) {
+                Ok(val) => self.todos.push(val),
+                Err(_) => {}
+            };
+        }
 
         Ok(())
     }
 
-    fn save_into_db(&self) -> Result<(), String> {
+    fn save_into_db(&self) -> Result<(), anyhow::Error> {
         let mut client = set_client()?;
 
-        for (i, todo) in self.todos.iter().enumerate() {
+        for id in self.removed_todos.iter() {
+            client.execute("DELETE FROM todo WHERE id=$1", &[id])?;
+        }
+
+        for todo in self.todos.iter() {
             let part: PartialTodo = todo.clone().into();
 
             log::trace!("{:?}", part);
 
-            if i < self.got_from_db {
-                log::trace!(
-                    "UPDATE todo SET heading = {}, body = {}, checked = {} WHERE id = {}",
-                    part.heading,
-                    part.body,
-                    part.checked,
-                    i as i32
-                );
+            log::trace!(
+                "UPDATE todo SET heading = {}, body = {}, checked = {} WHERE id = {}",
+                part.heading,
+                part.body,
+                part.checked,
+                part.id,
+            );
 
-                client
-                    .execute(
-                        "UPDATE todo SET heading = $1, body = $2, checked = $3 WHERE id = $4",
-                        &[&part.heading, &part.body, &part.checked, &(i as i32 + 1)],
-                    )
-                    .map_err(|err| format!("execute: {}", err.to_string()))?;
+            let mut transaction = client.transaction()?;
+
+            if let Ok(_) =
+                transaction.query_one("SELECT * FROM todo WHERE id=$1 LIMIT 1", &[&part.id])
+            {
+                transaction.execute(
+                    "UPDATE todo SET heading = $1, body = $2, checked = $3 WHERE id = $4",
+                    &[&part.heading, &part.body, &part.checked, &part.id],
+                )?;
             } else {
-                client
-                    .execute(
-                        "INSERT INTO todo (heading, body, checked) VALUES ($1, $2, $3)",
-                        &[&part.heading, &part.body, &part.checked],
-                    )
-                    .map_err(|err| format!("execute: {}", err.to_string()))?;
+                transaction.execute(
+                    "INSERT INTO todo (id, heading, body, checked) VALUES ($1, $2, $3, $4)",
+                    &[&part.id, &part.heading, &part.body, &part.checked],
+                )?;
             }
+
+            transaction.commit()?;
         }
 
         Ok(())
@@ -303,12 +323,13 @@ impl eframe::App for TodoApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         CentralPanel::default().show(ctx, |ui| {
             ui.heading("Orange To Do - a minimalistic to do app");
-            self.image.show_size(ui, egui::Vec2 { x: 10.0, y: 10.0 });
 
-            ScrollArea::vertical()
+            ScrollArea::both()
                 .auto_shrink([false, false])
                 .always_show_scroll(false)
                 .show(ui, |ui| {
+                    self.image.show_scaled(ui, 0.3);
+
                     self.show_all_todos(ui);
 
                     if ui.button("Show make-todo-dialog").clicked() {
@@ -369,22 +390,24 @@ fn display_tags(todo: &PartialTodo, ui: &mut Ui) {
     }
 }
 
-fn set_client() -> Result<Client, String> {
-    let password = std::fs::read_to_string("./secrets.toml").map_err(|err| err.to_string())?;
-    let config: Config = toml::de::from_str(&password).map_err(|err| err.to_string())?;
+fn set_client() -> Result<Client, db::set::Error> {
+    use db::set::Error;
+
+    let password = std::fs::read_to_string("./secrets.toml").map_err(|_| Error::ReadConfig)?;
+    let config: Config = toml::de::from_str(&password).map_err(|_| Error::ReadConfig)?;
 
     let connect_config = &format!(
         "host=localhost port=5432 user={} password={}",
         config.db.user, config.db.password
     );
 
-    Ok(Client::connect(&connect_config, NoTls)
-        .map_err(|err| format!("ClientConnect: {}", err.to_string()))?)
+    Ok(Client::connect(&connect_config, NoTls).map_err(|_| Error::SetupDb)?)
 }
 
-fn make_todo_edit(ui: &mut &mut Ui, todo: &&mut Todo) -> (bool, bool) {
+fn make_todo_edit(ui: &mut Ui, todo: &&mut Todo) -> (bool, bool, bool) {
     let mut todo_check_clicked: bool = false;
     let mut todo_icon_clicked: bool = false;
+    let mut todo_remove_clicked: bool = false;
 
     ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
         todo_check_clicked = ui
@@ -413,7 +436,8 @@ fn make_todo_edit(ui: &mut &mut Ui, todo: &&mut Todo) -> (bool, bool) {
                 rich
             })
             .clicked();
+        todo_remove_clicked = ui.button(RichText::from("🗑️").color(Color32::RED)).clicked();
     });
 
-    (todo_check_clicked, todo_icon_clicked)
+    (todo_check_clicked, todo_icon_clicked, todo_remove_clicked)
 }
