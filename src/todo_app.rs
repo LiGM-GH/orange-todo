@@ -27,14 +27,14 @@ const UNCHECKED_TODO_MARK_COLOR: Color32 = Color32::DARK_RED;
 pub struct TodoApp {
     todos: Vec<Todo>,
     on_close: OnClose,
-    edit: TodoEditing,
+    edit: TodoEdit,
     image: egui_extras::RetainedImage,
     removed_todos: Vec<Id>,
     todo_to_remove: Option<Id>,
 }
 
 #[derive(Default, Debug)]
-struct TodoEditing {
+struct TodoEdit {
     show_todo_maker: bool,
     todo_maker: TodoEditor,
     todo_editor: TodoEditor,
@@ -53,7 +53,7 @@ impl Default for TodoApp {
         Self {
             todos: Vec::new(),
             on_close: OnClose::default(),
-            edit: TodoEditing::default(),
+            edit: TodoEdit::default(),
             image: RetainedImage::from_image_bytes("orange.png", include_bytes!("orange.png"))
                 .expect("Couldn't find image 'orange.jpg' which is by default in src/ dir."),
             removed_todos: Vec::new(),
@@ -169,19 +169,7 @@ impl TodoApp {
 
                 start_timer(&mut self.edit.button_switch_timer);
 
-                if self.edit.todo_bound_with_editor.is_none() {
-                    self.edit.todo_bound_with_editor = Some(*todo.id() as usize);
-                    self.edit.todo_editor.todo = Some(Clone::clone(todo).into());
-                } else {
-                    log::trace!("{:#?}", self.edit.button_switch_timer);
-
-                    if let Some(timer) = self.edit.button_switch_timer {
-                        if timer.elapsed() >= BUTTON_SWITCH_DURATION {
-                            self.edit.todo_bound_with_editor = None;
-                            self.edit.button_switch_timer = None;
-                        };
-                    }
-                }
+                switch_todo_binding(&mut self.edit, todo);
             }
 
             match self.edit.todo_bound_with_editor {
@@ -189,57 +177,7 @@ impl TodoApp {
                     Frame::window(&Style::default())
                         .fill(EDITOR_COLOR)
                         .show(ui, |ui| {
-                            if let Some(edited_todo) = self.edit.todo_editor.todo.as_mut() {
-                                ui.text_edit_singleline(&mut edited_todo.heading);
-
-                                ui.text_edit_multiline(&mut edited_todo.body);
-
-                                ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                                    display_tags(edited_todo, ui);
-                                });
-
-                                if ui.button("Save todo!").clicked() {
-                                    self.edit.todo_editor.save_result = {
-                                        let edition =
-                                            TryInto::<Todo>::try_into(edited_todo.clone());
-
-                                        match edition {
-                                            Ok(mut val) => {
-                                                mem::swap(&mut val, todo);
-                                                self.edit.todo_editor.todo = None;
-                                                Ok(())
-                                            }
-                                            Err(err) => Err(err),
-                                        }
-                                    };
-
-                                    log::trace!(
-                                        "Editor save result: {:?}",
-                                        self.edit.todo_editor.save_result
-                                    );
-
-                                    match self.edit.todo_editor.save_result {
-                                        Ok(_) => {
-                                            self.edit.todo_editor.todo = None;
-                                            self.edit.todo_bound_with_editor = None;
-                                        }
-                                        Err(TodoError::EmptyBody) => {
-                                            log::info!("Tried to remove todo's body!");
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-
-                            match self.edit.todo_editor.save_result {
-                                Err(TodoError::EmptyBody) => {
-                                    ui.label(
-                                        RichText::from("Add body. Todo can't have empty body!")
-                                            .color(EDITOR_WARNING_COLOR),
-                                    );
-                                }
-                                _ => {}
-                            }
+                            make_todo_editor(&mut self.edit, todo, ui);
                         });
                 }
                 _ => (),
@@ -391,12 +329,13 @@ fn set_client() -> Result<Client, db::set::Error> {
 
 fn check_button(ui: &mut Ui, checked: bool) -> Response {
     ui.add(
-        Button::new(RichText::from(if checked { "☑" } else { "☐" }))
-            .fill(match checked {
+        Button::new(
+            RichText::from(if checked { "▣" } else { "☐" }).color(match checked {
                 true => CHECKED_TODO_MARK_COLOR,
                 false => UNCHECKED_TODO_MARK_COLOR,
-            })
-            .frame(false),
+            }),
+        )
+        .frame(false),
     )
 }
 
@@ -414,11 +353,7 @@ fn heading_button(ui: &mut Ui, text: &str, checked: bool) -> Response {
 }
 
 fn delete_button(ui: &mut Ui) -> Response {
-    ui.add(
-        Button::new(RichText::from("🗑"))
-            .fill(Color32::RED)
-            .frame(false),
-    )
+    ui.add(Button::new(RichText::from("🗑").color(Color32::RED)).frame(false))
 }
 
 fn show_todo_header(ui: &mut Ui, todo: &&mut Todo) -> (bool, bool, bool) {
@@ -438,5 +373,70 @@ fn show_todo_header(ui: &mut Ui, todo: &&mut Todo) -> (bool, bool, bool) {
 fn start_timer(timer: &mut Option<Instant>) {
     if timer.is_none() {
         *timer = Some(Instant::now());
+    }
+}
+
+fn make_todo_editor(edit: &mut TodoEdit, todo: &mut Todo, ui: &mut Ui) {
+    if let Some(edited_todo) = edit.todo_editor.todo.as_mut() {
+        ui.text_edit_singleline(&mut edited_todo.heading);
+
+        ui.text_edit_multiline(&mut edited_todo.body);
+
+        ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
+            display_tags(edited_todo, ui);
+        });
+
+        if ui.button("Save todo!").clicked() {
+            edit.todo_editor.save_result = {
+                let edition = TryInto::<Todo>::try_into(edited_todo.clone());
+
+                match edition {
+                    Ok(mut val) => {
+                        mem::swap(&mut val, todo);
+                        edit.todo_editor.todo = None;
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            };
+
+            log::trace!("Editor save result: {:?}", edit.todo_editor.save_result);
+
+            match edit.todo_editor.save_result {
+                Ok(_) => {
+                    edit.todo_editor.todo = None;
+                    edit.todo_bound_with_editor = None;
+                }
+                Err(TodoError::EmptyBody) => {
+                    log::info!("Tried to remove todo's body!");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    match edit.todo_editor.save_result {
+        Err(TodoError::EmptyBody) => {
+            ui.label(
+                RichText::from("Add body. Todo can't have empty body!").color(EDITOR_WARNING_COLOR),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn switch_todo_binding(edit: &mut TodoEdit, todo: &Todo) {
+    if edit.todo_bound_with_editor.is_none() {
+        edit.todo_bound_with_editor = Some(*todo.id() as usize);
+        edit.todo_editor.todo = Some(Clone::clone(todo).into());
+    } else {
+        log::trace!("{:#?}", edit.button_switch_timer);
+
+        if let Some(timer) = edit.button_switch_timer {
+            if timer.elapsed() >= BUTTON_SWITCH_DURATION {
+                edit.todo_bound_with_editor = None;
+                edit.button_switch_timer = None;
+            };
+        }
     }
 }

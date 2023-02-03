@@ -11,7 +11,9 @@ fn main() {
         Ok(_) => log::trace!("Db initialized successfully"),
         Err(err) => log::error!("Error occured while initializing db: {}", err.to_string()),
     }
+
     let native_options = eframe::NativeOptions::default();
+
     eframe::run_native(
         "Orange To Do",
         native_options,
@@ -19,21 +21,19 @@ fn main() {
     )
 }
 
-fn init_db() -> Result<(), String> {
-    let password = std::fs::read_to_string("./secrets.toml").map_err(|err| err.to_string())?;
-    let config: Config = toml::de::from_str(&password).map_err(|err| err.to_string())?;
+fn init_db() -> Result<(), anyhow::Error> {
+    let password = std::fs::read_to_string("./secrets.toml")?;
+    let config: Config = toml::de::from_str(&password)?;
 
     let connect_config = &format!(
         "host=localhost port=5432 user={} password={}",
         config.db.user, config.db.password
     );
 
-    let mut client = Client::connect(&connect_config, NoTls)
-        .map_err(|err| format!("ClientConnect: {}", err.to_string()))?;
+    let mut client = Client::connect(&connect_config, NoTls)?;
 
-    client
-        .batch_execute(
-            "
+    client.batch_execute(
+        "
                 CREATE TABLE IF NOT EXISTS todo (
                     id SERIAL PRIMARY KEY,
                     heading TEXT NOT NULL,
@@ -44,7 +44,6 @@ fn init_db() -> Result<(), String> {
                     tags TEXT[]
                 )
             ",
-        )
-        .map_err(|err| err.to_string())?;
+    )?;
     Ok(())
 }
