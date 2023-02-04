@@ -1,11 +1,9 @@
-use crate::Todo;
-
-use super::add_todo_error::AddTodoError;
+use super::todo::{TodoError, PartialTodo};
 
 #[derive(Debug)]
 pub struct TodoEditor {
-    pub todo: Option<Todo>,
-    pub save_result: Result<(), AddTodoError>,
+    pub todo: Option<PartialTodo>,
+    pub save_result: Result<(), TodoError>,
 }
 
 impl Default for TodoEditor {
@@ -16,4 +14,3 @@ impl Default for TodoEditor {
         }
     }
 }
-
