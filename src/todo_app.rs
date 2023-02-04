@@ -110,16 +110,7 @@ impl TodoApp {
                     };
                 };
 
-                match &self.edit.todo_maker.save_result {
-                    Err(TodoError::EmptyBody) => {
-                        ui.label(
-                            RichText::new("Add body. Todo can't have empty body!")
-                                .color(EDITOR_WARNING_COLOR),
-                        );
-                        log::info!("Todo body not added while trying to save.");
-                    }
-                    _ => {}
-                }
+                tell_wontsave_if_err(&self.edit.todo_maker.save_result, ui);
             });
     }
 
@@ -438,5 +429,18 @@ fn switch_todo_binding(edit: &mut TodoEdit, todo: &Todo) {
                 edit.button_switch_timer = None;
             };
         }
+    }
+}
+
+fn tell_wontsave_if_err(state: &Result<(), TodoError>, ui: &mut Ui) {
+    match state {
+        Err(TodoError::EmptyBody) => {
+            ui.label(
+                RichText::new("Add body. Todo can't have empty body!").color(EDITOR_WARNING_COLOR),
+            );
+
+            log::info!("Todo body not added while trying to save.");
+        }
+        _ => {}
     }
 }
